@@ -1,0 +1,113 @@
+import telebot
+from telebot import types
+
+# توكن البوت الجديد
+TOKEN = "7546538278:AAHoxiQ5KTXrKV588k5LgqIrmzXwcNQuyG4"
+bot = telebot.TeleBot(TOKEN)
+
+# الحالة والبلاغات
+user_states = {}
+user_reports = {}
+
+# رسالة الترحيب والأزرار
+def send_welcome(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.row("ابدأ")
+    markup.row("إبلاغ عن تحرش", "إبلاغ عن تهديد")
+    markup.row("إبلاغ عن بيع مخدرات", "إبلاغ متنوع")
+    markup.row("إلغاء")
+    welcome_text = (
+        "الشرطة الجزائرية في خدمة المواطن 🇩🇿\n\n"
+        "مرحبًا بك في نظام التبليغ الآمن.\n"
+        "يرجى اختيار نوع البلاغ من الأزرار التالية:"
+    )
+    bot.send_message(message.chat.id, welcome_text, reply_markup=markup)
+
+# عند /start أو الضغط على "ابدأ"
+@bot.message_handler(commands=['start'])
+def handle_start_command(message):
+    send_welcome(message)
+
+@bot.message_handler(func=lambda message: message.text == "ابدأ")
+def handle_start_button(message):
+    send_welcome(message)
+
+# اختيار نوع البلاغ
+@bot.message_handler(func=lambda message: message.text in [
+    "إبلاغ عن تحرش", "إبلاغ عن تهديد", "إبلاغ عن بيع مخدرات", "إبلاغ متنوع"
+])
+def ask_for_details(message):
+    chat_id = message.chat.id
+    user_states[chat_id] = "انتظار التفاصيل"
+    user_reports[chat_id] = {"نوع": message.text}
+    bot.send_message(chat_id, "يرجى كتابة تفاصيل البلاغ بدقة (ما حدث، متى، أين، ومن):")
+
+# إلغاء البلاغ
+@bot.message_handler(func=lambda message: message.text == "إلغاء")
+def cancel_report(message):
+    chat_id = message.chat.id
+    user_states.pop(chat_id, None)
+    user_reports.pop(chat_id, None)
+    bot.send_message(chat_id, "❌ تم إلغاء البلاغ بنجاح.")
+
+# معالجة النصوص
+@bot.message_handler(content_types=['text'])
+def handle_text(message):
+    chat_id = message.chat.id
+    state = user_states.get(chat_id)
+
+    if state == "انتظار التفاصيل":
+        user_reports[chat_id]["التفاصيل"] = message.text
+        user_states[chat_id] = "انتظار الهاتف"
+        bot.send_message(chat_id, "📞 يرجى إدخال رقم هاتفك للاتصال بك إذا لزم الأمر:")
+
+    elif state == "انتظار الهاتف":
+        phone = message.text.strip()
+
+        # التحقق الصارم من رقم الهاتف
+        if (
+            phone.startswith(("05", "06", "07")) and
+            len(phone) == 10 and
+            phone.isdigit()
+        ):
+            user_reports[chat_id]["الهاتف"] = phone
+            user_states[chat_id] = "انتظار الموقع"
+
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+            button_geo = types.KeyboardButton("📍 إرسال موقعي الجغرافي", request_location=True)
+            markup.add(button_geo)
+            bot.send_message(chat_id, "📍 يرجى إرسال موقعك الجغرافي بالضغط على الزر أدناه:", reply_markup=markup)
+        else:
+            bot.send_message(chat_id, "⚠️ رقم الهاتف غير صحيح. يجب أن يبدأ بـ 05 أو 06 أو 07 ويتكون من 10 أرقام.")
+
+    else:
+        send_welcome(message)
+
+# استقبال الموقع الجغرافي
+@bot.message_handler(content_types=['location'])
+def handle_location(message):
+    chat_id = message.chat.id
+    if chat_id in user_states and user_states[chat_id] == "انتظار الموقع":
+        latitude = message.location.latitude
+        longitude = message.location.longitude
+
+        report = user_reports.pop(chat_id, {})
+        user_states.pop(chat_id, None)
+
+        # تخزين البلاغ في ملف
+        with open("reports.txt", "a", encoding="utf-8") as file:
+            file.write(
+                f"بلاغ جديد من المستخدم {chat_id}:\n"
+                f"النوع: {report.get('نوع')}\n"
+                f"التفاصيل: {report.get('التفاصيل')}\n"
+                f"الهاتف: {report.get('الهاتف')}\n"
+                f"الموقع: {latitude}, {longitude}\n\n"
+            )
+
+        bot.send_message(chat_id, "✅ تم استلام موقعك مع البلاغ. شكراً لتعاونك.")
+    else:
+        bot.send_message(chat_id, "⚠️ لم نطلب موقعك حالياً. يرجى اختيار نوع بلاغ أولاً.")
+
+# تشغيل البوت
+bot.infinity_polling()
+
